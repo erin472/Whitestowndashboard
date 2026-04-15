@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "whitestown-dashboard",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["node", "server.js"],
+      "port": 3000,
+      "cwd": "/Users/eringracyalnygw/Desktop/Claude/Dashboards/Hershey/Whitestown",
+      "env": {
+        "DASHBOARD_PASSWORD": "test123"
+      }
+    }
+  ]
+}
