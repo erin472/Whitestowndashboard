@@ -1,0 +1,10 @@
+# Backup files from data-update scripts
+*.backup-*
+*.backup
+# OS
+.DS_Store
+# Editor
+.claude/
+# Local temp
+node_modules/
+npm-debug.log

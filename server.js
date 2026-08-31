@@ -21,14 +21,43 @@ app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'strict' }
+  // 'lax' so that the SSO bypass cookie set via cross-site link still works
+  cookie: { httpOnly: true, sameSite: 'lax' }
 }));
 
 // Serve static assets (chart.js etc.) without auth
 app.use('/assets', express.static(path.join(__dirname, 'Whitestown Plant Runtime Dashboard _ Hershey_files')));
 
+// ─── Executive SSO bypass ─────────────────────────────────────────────────────
+// Shared HMAC secret with the leadership dashboard.
+const EXEC_BYPASS_SECRET = process.env.EXEC_BYPASS_SECRET || '';
+const EXEC_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+
+function verifyExecBypassToken(token) {
+  if (!token || !EXEC_BYPASS_SECRET) return null;
+  try {
+    const [b64, sig] = token.split('.');
+    if (!b64 || !sig) return null;
+    const data = Buffer.from(b64, 'base64url').toString('utf8');
+    const expected = crypto.createHmac('sha256', EXEC_BYPASS_SECRET).update(data).digest('hex');
+    if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) return null;
+    const payload = JSON.parse(data);
+    if (!payload.exec) return null;
+    if (Date.now() - payload.ts > EXEC_TOKEN_TTL_MS) return null;
+    return payload;
+  } catch { return null; }
+}
+
 function requireAuth(req, res, next) {
   if (req.session && req.session.authenticated) return next();
+  // Honor a valid exec bypass token from the leadership dashboard.
+  // We do NOT redirect here — browsers may drop a freshly-set cookie on a
+  // cross-origin redirect chain. Just authenticate the session and proceed.
+  if (req.query.token && verifyExecBypassToken(req.query.token)) {
+    req.session.authenticated = true;
+    req.session.via = 'exec';
+    return next();
+  }
   res.redirect('/login');
 }
 
@@ -159,6 +188,87 @@ app.delete('/api/dmaic/:id', requireAuth, (req, res) => {
   if (entries.length === before) return res.status(404).json({ error: 'Not found' });
   dmaicSave(entries);
   res.json({ ok: true });
+});
+
+// ===== Baseline Notes — single shared document =====
+const BASELINE_FILE = path.join(DATA_DIR, 'baseline-notes.json');
+function baselineLoad() {
+  try { return JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')); }
+  catch (e) { return { notes: '', updatedBy: '', updatedAt: '' }; }
+}
+function baselineSave(doc) {
+  fs.writeFileSync(BASELINE_FILE, JSON.stringify(doc, null, 2), 'utf8');
+}
+app.get('/api/baseline-notes', requireAuth, (req, res) => {
+  res.json(baselineLoad());
+});
+app.put('/api/baseline-notes', requireAuth, (req, res) => {
+  const notes = (req.body && typeof req.body.notes === 'string') ? req.body.notes : '';
+  const doc = {
+    notes: notes,
+    updatedBy: req.session.email || 'unknown',
+    updatedAt: new Date().toISOString()
+  };
+  baselineSave(doc);
+  res.json({ ok: true, doc });
+});
+
+// ===== Sensor Statuses — per-device metadata (repurposed/retired/etc.) =====
+const SENSOR_STATUS_FILE = path.join(DATA_DIR, 'sensor-statuses.json');
+function sensorStatusLoad() {
+  try { return JSON.parse(fs.readFileSync(SENSOR_STATUS_FILE, 'utf8')); }
+  catch (e) { return {}; }
+}
+function sensorStatusSave(doc) {
+  fs.writeFileSync(SENSOR_STATUS_FILE, JSON.stringify(doc, null, 2), 'utf8');
+}
+app.get('/api/sensor-status', requireAuth, (req, res) => {
+  res.json(sensorStatusLoad());
+});
+app.put('/api/sensor-status', requireAuth, (req, res) => {
+  const incoming = (req.body && typeof req.body === 'object') ? req.body : {};
+  const existing = sensorStatusLoad();
+  // Merge: incoming wins per device. Empty status removes the entry.
+  Object.keys(incoming).forEach(function(k) {
+    const v = incoming[k];
+    if (!v || !v.status) {
+      delete existing[k];
+    } else {
+      existing[k] = {
+        status: String(v.status),
+        note: String(v.note || ''),
+        date: String(v.date || ''),
+        updatedBy: req.session.email || 'unknown',
+        updatedAt: new Date().toISOString()
+      };
+    }
+  });
+  sensorStatusSave(existing);
+  res.json({ ok: true, statuses: existing });
+});
+
+// ===== Plant Config — single shared document (for $ Impact calc) =====
+const PLANT_CONFIG_FILE = path.join(DATA_DIR, 'plant-config.json');
+function plantConfigLoad() {
+  try { return JSON.parse(fs.readFileSync(PLANT_CONFIG_FILE, 'utf8')); }
+  catch (e) { return { throughput: '', price: '', operatingHrsPerYear: 8400, electricityRate: 0.10, updatedBy: '', updatedAt: '' }; }
+}
+function plantConfigSave(doc) {
+  fs.writeFileSync(PLANT_CONFIG_FILE, JSON.stringify(doc, null, 2), 'utf8');
+}
+app.get('/api/plant-config', requireAuth, (req, res) => res.json(plantConfigLoad()));
+app.put('/api/plant-config', requireAuth, (req, res) => {
+  const b = req.body || {};
+  const doc = {
+    throughput: typeof b.throughput === 'number' || (typeof b.throughput === 'string' && b.throughput.trim() !== '') ? Number(b.throughput) : '',
+    price: typeof b.price === 'number' || (typeof b.price === 'string' && b.price.trim() !== '') ? Number(b.price) : '',
+    operatingHrsPerYear: Number(b.operatingHrsPerYear) || 8400,
+    electricityRate: Number(b.electricityRate) || 0.10,
+    updatedBy: req.session.email || 'unknown',
+    updatedAt: new Date().toISOString()
+  };
+  plantConfigSave(doc);
+  res.json({ ok: true, doc });
 });
 
 // Email capture (store in session for PostHog)
