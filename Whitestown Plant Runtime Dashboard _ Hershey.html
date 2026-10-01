@@ -3258,6 +3258,20 @@
 
         <!-- Impact Tracker Section -->
         <section id="impact" class="section">
+            <div class="sub-section" id="sub-impact-suggestions">
+                <div class="card" style="margin-bottom:1.5rem;border-left:4px solid var(--hershey-gold);">
+                    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                        <h3>💡 Suggested entries to log <span style="font-size:0.75rem;font-weight:400;color:#888;margin-left:0.5rem;" id="pdca-sug-count">(0)</span></h3>
+                        <button onclick="pdcaSuggestionsRefresh()" style="background:#fff;color:var(--hershey-brown);border:1px solid var(--hershey-brown);border-radius:6px;padding:0.4rem 0.9rem;font-size:0.8rem;cursor:pointer;">↻ Refresh</button>
+                    </div>
+                    <div class="card-body">
+                        <div style="background:#fff8e1;border-left:3px solid #f57c00;padding:0.6rem 0.9rem;border-radius:4px;margin-bottom:1rem;font-size:0.82rem;color:#555;">
+                            <strong>⚠️ Whitestown-only safeguard:</strong> suggestions are auto-filtered to this plant (SkinnyPop, Rovema 260, Kettle 6, Line 9, X-742, etc.) and screened against other Hershey plant names (Assemblers, EDC, Cocoa Line, Bedford Park, Reese). Always verify the <em>source call</em> on each card before converting. If you see a suggestion that references another site, click <strong>✕ Dismiss</strong> and let Erin know so the loader can be tuned.
+                        </div>
+                        <div id="pdca-suggestions-list"></div>
+                    </div>
+                </div>
+            </div>
             <div class="sub-section" id="sub-impact-tracker">
                 <div class="pdca-toolbar">
                     <div class="pdca-status-nav" id="pdca-status-nav">
@@ -8492,12 +8506,108 @@ devices: [
             return Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map(function(cb) { return cb.value; });
         }
 
-        function pdcaOpenAdd() {
+        function pdcaOpenAdd(prefill) {
             pdcaEditId = null;
-            document.getElementById('pdca-modal-title-text').textContent = 'Add DMAIC Entry';
+            document.getElementById('pdca-modal-title-text').textContent = prefill ? 'Add DMAIC Entry (from suggestion)' : 'Add DMAIC Entry';
             document.getElementById('pdca-form').reset();
             pdcaUpdateDevices();
+            if (prefill) {
+                if (prefill.title)   document.getElementById('pdca-title').value   = prefill.title;
+                if (prefill.plant)   document.getElementById('pdca-plant').value   = prefill.plant;
+                if (prefill.status)  document.getElementById('pdca-status').value  = prefill.status;
+                if (prefill.define)  document.getElementById('pdca-define').value  = prefill.define;
+                if (prefill.measure) document.getElementById('pdca-measure').value = prefill.measure;
+                if (prefill.analyze) document.getElementById('pdca-analyze').value = prefill.analyze;
+                if (prefill.improve) document.getElementById('pdca-improve').value = prefill.improve;
+                if (prefill.control) document.getElementById('pdca-control').value = prefill.control;
+                if (prefill.dateFrom) document.getElementById('pdca-date-from').value = prefill.dateFrom;
+                if (prefill.dateTo)   document.getElementById('pdca-date-to').value   = prefill.dateTo;
+                pdcaUpdateDevices();
+                if (prefill.devices && prefill.devices.length) {
+                    setTimeout(function() {
+                        var listEl = document.getElementById('pdca-device-list');
+                        if (!listEl) return;
+                        listEl.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+                            if (prefill.devices.indexOf(cb.value) !== -1) cb.checked = true;
+                        });
+                    }, 0);
+                }
+                // Remember which suggestion seeded this entry so we can auto-dismiss on save
+                window._pdcaFromSuggestionId = prefill.suggestionId || null;
+            } else {
+                window._pdcaFromSuggestionId = null;
+            }
             document.getElementById('pdca-overlay').classList.add('open');
+        }
+
+        // ===== DMAIC Suggestions (call-sourced) =====
+        var PDCA_SUGGESTIONS = [];
+        function pdcaSuggestionsRefresh() {
+            fetch('/api/dmaic-suggestions').then(function(r){ return r.json(); }).then(function(list) {
+                PDCA_SUGGESTIONS = Array.isArray(list) ? list : [];
+                pdcaSuggestionsRender();
+            }).catch(function() {});
+        }
+        function pdcaSuggestionsRender() {
+            var el = document.getElementById('pdca-suggestions-list');
+            var cnt = document.getElementById('pdca-sug-count');
+            if (!el) return;
+            if (cnt) cnt.textContent = '(' + PDCA_SUGGESTIONS.length + ')';
+            if (!PDCA_SUGGESTIONS.length) {
+                el.innerHTML = '<div style="padding:1rem;text-align:center;color:#888;font-size:0.85rem;font-style:italic;">No suggested entries right now. New suggestions will appear here when customer-call activity surfaces something worth logging — ask Claude to "pull Whitestown call suggestions" after a weekly sync.</div>';
+                return;
+            }
+            var esc = function(s) { return (s || '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+            var html = PDCA_SUGGESTIONS.map(function(s) {
+                var siteOk = !s.site || s.site === 'whitestown';
+                var siteWarn = siteOk ? '' :
+                    '<div style="background:#ffebee;border-left:3px solid #c62828;padding:0.4rem 0.6rem;border-radius:4px;margin-bottom:0.5rem;font-size:0.78rem;color:#c62828;"><strong>⚠️ Site mismatch:</strong> this suggestion is tagged <code>' + esc(s.site) + '</code>, not <code>whitestown</code>. Verify before converting.</div>';
+                var sourceLine = s.source ?
+                    '<div style="font-size:0.72rem;color:#888;margin-top:0.3rem;">📞 <strong>Source:</strong> ' + esc(s.source) +
+                    (s.sourceDate ? ' · ' + esc(s.sourceDate) : '') +
+                    (s.sourceParticipants ? ' · ' + esc(s.sourceParticipants) : '') + '</div>' : '';
+                var devs = (s.devices && s.devices.length) ?
+                    '<div style="font-size:0.72rem;color:#555;margin-top:0.3rem;">🔧 <strong>Devices:</strong> ' + esc(s.devices.slice(0,3).join(', ')) + (s.devices.length > 3 ? ' +' + (s.devices.length - 3) + ' more' : '') + '</div>' : '';
+                return '<div style="background:#fff;border:1px solid #e8e0d4;border-radius:8px;padding:0.9rem 1rem;margin-bottom:0.75rem;">' +
+                    siteWarn +
+                    '<div style="display:flex;justify-content:space-between;align-items:start;gap:1rem;">' +
+                        '<div style="flex:1;min-width:0;">' +
+                            '<div style="font-weight:600;font-size:0.95rem;color:var(--hershey-brown);margin-bottom:0.3rem;">' + esc(s.title) + '</div>' +
+                            (s.summary ? '<div style="font-size:0.82rem;color:#555;line-height:1.45;">' + esc(s.summary) + '</div>' : '') +
+                            sourceLine + devs +
+                        '</div>' +
+                        '<div style="display:flex;flex-direction:column;gap:0.3rem;flex-shrink:0;">' +
+                            '<button onclick="pdcaConvertSuggestion(\'' + s.id + '\')" style="background:var(--hershey-brown);color:#fff;border:none;border-radius:6px;padding:0.4rem 0.8rem;font-size:0.78rem;cursor:pointer;font-weight:600;white-space:nowrap;">+ Convert</button>' +
+                            '<button onclick="pdcaDismissSuggestion(\'' + s.id + '\')" style="background:#fff;color:#999;border:1px solid #ddd;border-radius:6px;padding:0.35rem 0.8rem;font-size:0.78rem;cursor:pointer;white-space:nowrap;">✕ Dismiss</button>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+            }).join('');
+            el.innerHTML = html;
+        }
+        function pdcaConvertSuggestion(id) {
+            var s = PDCA_SUGGESTIONS.find(function(x) { return x.id === id; });
+            if (!s) return;
+            pdcaOpenAdd({
+                title: s.title,
+                plant: s.plant || 'all',
+                status: s.status || 'not-started',
+                define: s.define || s.summary || '',
+                measure: s.measure || '',
+                analyze: s.analyze || '',
+                improve: s.improve || '',
+                control: s.control || '',
+                devices: s.devices || [],
+                dateFrom: s.dateFrom || '',
+                dateTo: s.dateTo || '',
+                suggestionId: s.id
+            });
+        }
+        function pdcaDismissSuggestion(id) {
+            if (!confirm('Dismiss this suggestion? It will be removed from the list.')) return;
+            fetch('/api/dmaic-suggestions/' + encodeURIComponent(id), { method: 'DELETE' })
+                .then(function() { pdcaSuggestionsRefresh(); })
+                .catch(function() { alert('Could not dismiss.'); });
         }
 
         function pdcaOpenEdit(id) {
@@ -8554,6 +8664,13 @@ devices: [
             }).then(function(r) { return r.json(); }).then(function(resp) {
                 if (resp.ok) {
                     pdcaCloseModal();
+                    // If this entry came from a suggestion, auto-dismiss it
+                    if (window._pdcaFromSuggestionId) {
+                        fetch('/api/dmaic-suggestions/' + encodeURIComponent(window._pdcaFromSuggestionId), { method: 'DELETE' })
+                            .then(function() { pdcaSuggestionsRefresh(); })
+                            .catch(function() {});
+                        window._pdcaFromSuggestionId = null;
+                    }
                     pdcaFetchAll(function() { pdcaRender(); if (charts.weeklyComparison) { charts.weeklyComparison.destroy(); createWeeklyComparisonChart(); } });
                 } else {
                     alert('Error saving entry: ' + (resp.error || 'Unknown'));
@@ -8715,7 +8832,7 @@ devices: [
                     fggOpen(); return;
                 }
                 _orig(tabId);
-                if (tabId === 'impact') pdcaFetchAll(function() { pdcaRender(); });
+                if (tabId === 'impact') { pdcaFetchAll(function() { pdcaRender(); }); pdcaSuggestionsRefresh(); }
             };
         })();
 

@@ -271,6 +271,42 @@ app.put('/api/plant-config', requireAuth, (req, res) => {
   res.json({ ok: true, doc });
 });
 
+// ===== DMAIC Suggestions — call-sourced ideas awaiting conversion =====
+// Each suggestion is scoped to Whitestown only. Guardrails live client-side AND
+// in the loader workflow (strict include/exclude list) to prevent cross-site leakage.
+const SUGGESTIONS_FILE = path.join(DATA_DIR, 'dmaic-suggestions.json');
+function suggestionsLoad() {
+  try { return JSON.parse(fs.readFileSync(SUGGESTIONS_FILE, 'utf8')); }
+  catch (e) { return []; }
+}
+function suggestionsSave(arr) {
+  fs.writeFileSync(SUGGESTIONS_FILE, JSON.stringify(arr, null, 2), 'utf8');
+}
+app.get('/api/dmaic-suggestions', requireAuth, (req, res) => {
+  res.json(suggestionsLoad());
+});
+app.post('/api/dmaic-suggestions', requireAuth, (req, res) => {
+  const s = req.body;
+  if (!s || !s.title) return res.status(400).json({ error: 'Title required' });
+  const list = suggestionsLoad();
+  s.id = s.id || 'sug_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  s.createdBy = s.createdBy || (req.session.email || 'unknown');
+  s.createdAt = s.createdAt || new Date().toISOString();
+  // Default plant tag — client renders a safety banner if site is anything other than Whitestown
+  s.site = s.site || 'whitestown';
+  list.push(s);
+  suggestionsSave(list);
+  res.json({ ok: true, suggestion: s });
+});
+app.delete('/api/dmaic-suggestions/:id', requireAuth, (req, res) => {
+  let list = suggestionsLoad();
+  const before = list.length;
+  list = list.filter(s => s.id !== req.params.id);
+  if (list.length === before) return res.status(404).json({ error: 'Not found' });
+  suggestionsSave(list);
+  res.json({ ok: true });
+});
+
 // Email capture (store in session for PostHog)
 app.post('/identify', requireAuth, (req, res) => {
   const email = (req.body.email || '').trim().toLowerCase();
